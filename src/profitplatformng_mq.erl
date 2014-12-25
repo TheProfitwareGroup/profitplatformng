@@ -24,7 +24,7 @@
 -include_lib("profitplatformng/include/profitplatformng.hrl").
 -define (SERVER, ?MODULE).
 
--record(state, {connection, channel}).
+-record(state, {connection, channel, statequeue}).
 
 %% ===================================================================
 %% API functions
@@ -47,17 +47,45 @@ init(_Args) ->
     {ok, Connection} = amqp_connection:start(ConnectionParams),
     {ok, Channel} = amqp_connection:open_channel(Connection),
 
-    {ok, init_state(Connection, Channel)}.
+    % Global queue to broadcast new queue names
+    StateQueueIdentifier = <<?MQPREFIX/binary, <<"state">>/binary>>,
+
+    DeclareExchange = #'exchange.declare'{exchange = StateQueueIdentifier, type = <<"fanout">>},
+    #'exchange.declare_ok'{} = amqp_channel:call(Channel, DeclareExchange),
+
+    DeclareQueue = #'queue.declare'{queue = StateQueueIdentifier},
+    #'queue.declare_ok'{} = amqp_channel:call(Channel, DeclareQueue),
+
+    Binding = #'queue.bind'{
+        queue = StateQueueIdentifier,
+        exchange = StateQueueIdentifier
+    },
+    #'queue.bind_ok'{} = amqp_channel:call(Channel, Binding),
+
+    Sub = #'basic.consume'{queue = StateQueueIdentifier},
+    #'basic.consume_ok'{consumer_tag = _StateQueueTag} = amqp_channel:call(Channel, Sub),
+
+    {ok, init_state(Connection, Channel, StateQueueIdentifier)}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({publish, Queue, Payload}, State) ->
-    QueuePrefixBinary = ?MQPREFIX,
-    QueuePartIdentifierBinary = atom_to_binary(Queue, latin1),
-    QueueIdentifier = <<QueuePrefixBinary/binary, QueuePartIdentifierBinary/binary>>,
     Channel = get_state_channel(State),
 
+    % Get fully qualified message queue name
+    QueuePartIdentifierBinary = atom_to_binary(Queue, latin1),
+    QueueIdentifier = <<?MQPREFIX/binary, QueuePartIdentifierBinary/binary>>,
+
+    % Broadcast queue name for workers to subscribe
+    StateQueueIdentifier = get_state_statequeue(State),
+    StateQueue = #'queue.declare'{queue = StateQueueIdentifier},
+    #'queue.declare_ok'{} = amqp_channel:call(Channel, StateQueue),
+
+    StateQueuePublish = #'basic.publish'{exchange = StateQueueIdentifier},
+    amqp_channel:cast(Channel, StateQueuePublish, #amqp_msg{payload = QueueIdentifier}),
+
+    % Check or create queue
     DeclareQueue = #'queue.declare'{queue = QueueIdentifier},
     #'queue.declare_ok'{} = amqp_channel:call(Channel, DeclareQueue),
 
@@ -68,7 +96,18 @@ handle_cast({publish, Queue, Payload}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    case Info of
+        {#'basic.deliver'{delivery_tag = Tag}, Content} ->
+            Channel = get_state_channel(State),
+            amqp_channel:cast(Channel, #'basic.ack'{delivery_tag = Tag}),
+            {amqp_msg, _ClassType, QueueIdentifier} = Content,
+
+            %% FIXME: simple_one_for_one supervisor creates child process which subscribes QueueIdentifier queue
+            io:format("Got queue name: ~s~n", [QueueIdentifier]);
+        _Others ->
+            ok
+    end,
     {noreply, State}.
 
 terminate(_Reason, State) ->
@@ -83,11 +122,12 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %% ===================================================================
 
--spec init_state(any, any) -> #state{}.
-init_state(Connection, Channel) ->
+-spec init_state(any, any, any) -> #state{}.
+init_state(Connection, Channel, StateQueue) ->
     #state{
         connection = Connection,
-        channel = Channel
+        channel = Channel,
+        statequeue = StateQueue
     }.
 
 -spec get_state_connection(#state{}) -> any.
@@ -97,3 +137,7 @@ get_state_connection(State) ->
 -spec get_state_channel(#state{}) -> any.
 get_state_channel(State) ->
     State#state.channel.
+
+-spec get_state_statequeue(#state{}) -> any.
+get_state_statequeue(State) ->
+    State#state.statequeue.
