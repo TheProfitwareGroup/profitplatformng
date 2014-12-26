@@ -2,17 +2,18 @@
 %%% @author ssobko
 %%% @copyright (C) 2014, The Profitware Group
 %%% @doc
-%%% Main application supervisor.
+%%% Queue worker supervisor.
 %%% @end
 %%% Created : 15.10.2014 15:53
 %%%-------------------------------------------------------------------
 
--module(profitplatformng_sup).
+-module(profitplatformng_worker_sup).
 
 -behaviour(supervisor).
 
 %% API
 -export([start_link/0]).
+-export([create_worker/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -28,16 +29,17 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?SERVER, []).
 
+create_worker(QueueIdentifier) ->
+    io:format("Starting child ~s~n", [QueueIdentifier]),
+    supervisor:start_child(?SERVER, [QueueIdentifier]).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([]) ->
-    Flags = {one_for_one, ?MAX_RESTART, ?MAX_TIME},
+    Flags = {simple_one_for_one, ?MAX_RESTART, ?MAX_TIME},
     Spec = [
-        ?CHILD(profitplatformng_config, worker, permanent),
-        ?CHILD(profitplatformng_mq_connection, worker, permanent),
-        ?CHILD(profitplatformng_mq, worker, permanent),
-        ?CHILD(profitplatformng_worker_sup, supervisor, permanent)
+        ?CHILD(profitplatformng_worker, worker, transient)
     ],
     {ok, {Flags, Spec}}.

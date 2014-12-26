@@ -24,7 +24,7 @@
 -include_lib("profitplatformng/include/profitplatformng.hrl").
 -define (SERVER, ?MODULE).
 
--record(state, {connection, channel, statequeue}).
+-record(state, {channel, state_exchange, state_queue, created_queues = []}).
 
 %% ===================================================================
 %% API functions
@@ -43,29 +43,28 @@ publish(Queue, Payload) ->
 %% ===================================================================
 
 init(_Args) ->
-    ConnectionParams = profitplatformng_config:get(rabbitmq, amqp_params),
-    {ok, Connection} = amqp_connection:start(ConnectionParams),
-    {ok, Channel} = amqp_connection:open_channel(Connection),
+    Channel = profitplatformng_mq_connection:get_channel(),
 
     % Global queue to broadcast new queue names
-    StateQueueIdentifier = <<?MQPREFIX/binary, <<"state">>/binary>>,
+    StateExchangeIdentifier = <<?MQPREFIX/binary, <<"state">>/binary>>,
 
-    DeclareExchange = #'exchange.declare'{exchange = StateQueueIdentifier, type = <<"fanout">>},
+    DeclareExchange = #'exchange.declare'{exchange = StateExchangeIdentifier},
     #'exchange.declare_ok'{} = amqp_channel:call(Channel, DeclareExchange),
 
-    DeclareQueue = #'queue.declare'{queue = StateQueueIdentifier},
-    #'queue.declare_ok'{} = amqp_channel:call(Channel, DeclareQueue),
+    DeclareQueue = #'queue.declare'{auto_delete = true},
+    #'queue.declare_ok'{queue = DeclareQueueIdentifier} = amqp_channel:call(Channel, DeclareQueue),
 
     Binding = #'queue.bind'{
-        queue = StateQueueIdentifier,
-        exchange = StateQueueIdentifier
+        queue = DeclareQueueIdentifier,
+        exchange = StateExchangeIdentifier,
+        routing_key = StateExchangeIdentifier
     },
     #'queue.bind_ok'{} = amqp_channel:call(Channel, Binding),
 
-    Sub = #'basic.consume'{queue = StateQueueIdentifier},
+    Sub = #'basic.consume'{queue = DeclareQueueIdentifier},
     #'basic.consume_ok'{consumer_tag = _StateQueueTag} = amqp_channel:call(Channel, Sub),
 
-    {ok, init_state(Connection, Channel, StateQueueIdentifier)}.
+    {ok, init_state(Channel, StateExchangeIdentifier, DeclareQueueIdentifier)}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -77,12 +76,9 @@ handle_cast({publish, Queue, Payload}, State) ->
     QueuePartIdentifierBinary = atom_to_binary(Queue, latin1),
     QueueIdentifier = <<?MQPREFIX/binary, QueuePartIdentifierBinary/binary>>,
 
-    % Broadcast queue name for workers to subscribe
-    StateQueueIdentifier = get_state_statequeue(State),
-    StateQueue = #'queue.declare'{queue = StateQueueIdentifier},
-    #'queue.declare_ok'{} = amqp_channel:call(Channel, StateQueue),
+    StateExchangeIdentifier = get_state_state_exchange(State),
 
-    StateQueuePublish = #'basic.publish'{exchange = StateQueueIdentifier},
+    StateQueuePublish = #'basic.publish'{exchange = StateExchangeIdentifier, routing_key = StateExchangeIdentifier},
     amqp_channel:cast(Channel, StateQueuePublish, #amqp_msg{payload = QueueIdentifier}),
 
     % Check or create queue
@@ -103,16 +99,15 @@ handle_info(Info, State) ->
             amqp_channel:cast(Channel, #'basic.ack'{delivery_tag = Tag}),
             {amqp_msg, _ClassType, QueueIdentifier} = Content,
 
-            %% FIXME: simple_one_for_one supervisor creates child process which subscribes QueueIdentifier queue
+            NewState = add_state_created_queue(State, QueueIdentifier),
             io:format("Got queue name: ~s~n", [QueueIdentifier]);
         _Others ->
-            ok
+            NewState = State
     end,
-    {noreply, State}.
+    {noreply, NewState}.
 
 terminate(_Reason, State) ->
-    amqp_channel:close(get_state_channel(State)),
-    amqp_connection:close(get_state_connection(State)),
+    profitplatformng_mq_connection:close_channel(get_state_channel(State)),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -123,21 +118,37 @@ code_change(_OldVsn, State, _Extra) ->
 %% ===================================================================
 
 -spec init_state(any, any, any) -> #state{}.
-init_state(Connection, Channel, StateQueue) ->
+init_state(Channel, StateExchange, StateQueue) ->
     #state{
-        connection = Connection,
         channel = Channel,
-        statequeue = StateQueue
+        state_exchange = StateExchange,
+        state_queue = StateQueue
     }.
-
--spec get_state_connection(#state{}) -> any.
-get_state_connection(State) ->
-    State#state.connection.
 
 -spec get_state_channel(#state{}) -> any.
 get_state_channel(State) ->
     State#state.channel.
 
--spec get_state_statequeue(#state{}) -> any.
-get_state_statequeue(State) ->
-    State#state.statequeue.
+-spec get_state_state_exchange(#state{}) -> any.
+get_state_state_exchange(State) ->
+    State#state.state_exchange.
+
+-spec get_state_state_queue(#state{}) -> any.
+get_state_state_queue(State) ->
+    State#state.state_queue.
+
+-spec get_state_created_queues(#state{}) -> any.
+get_state_created_queues(State) ->
+    State#state.created_queues.
+
+-spec add_state_created_queue(#state{}, binary) -> true | false.
+add_state_created_queue(State, QueueIdentifier) ->
+    CreatedQueues = get_state_created_queues(State),
+    case lists:member(QueueIdentifier, CreatedQueues) of
+        false ->
+            profitplatformng_worker_sup:create_worker(QueueIdentifier),
+            NewList = lists:append(CreatedQueues, [QueueIdentifier]);
+        true ->
+            NewList = get_state_created_queues(State)
+    end,
+    State#state{created_queues = NewList}.
