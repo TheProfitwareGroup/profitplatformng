@@ -23,7 +23,7 @@
 -include_lib("profitplatformng/include/profitplatformng.hrl").
 -define (SERVER, ?MODULE).
 
--record(state, {channel, queue}).
+-record(state, {channel, queue, python}).
 
 %% ===================================================================
 %% API functions
@@ -48,7 +48,13 @@ init([QueueIdentifier]) ->
 
     io:format("Consumed to queue ~s~n", [QueueIdentifier]),
 
-    {ok, init_state(Channel, QueueIdentifier)}.
+    {ok, Python} = python:start_link(profitplatformng_config:get(python, config)),
+    PythonClassConfig = profitplatformng_config:get(python, binary_to_atom(QueueIdentifier, latin1)),
+    PythonClass = proplists:get_value(python_class, PythonClassConfig),
+    PythonClassParams = proplists:get_value(params, PythonClassConfig),
+    python:call(Python, messageapi, messageapi_factory, [PythonClass, PythonClassParams]),
+
+    {ok, init_state(Channel, QueueIdentifier, Python)}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
@@ -63,7 +69,12 @@ handle_info(Info, State) ->
             amqp_channel:cast(Channel, #'basic.ack'{delivery_tag = Tag}),
             {amqp_msg, _ClassType, Message} = Content,
 
-            io:format("Got message '~s' to queue ~s~n", [Message, get_state_queue(State)]);
+            io:format("Got message '~s' to queue ~s~n", [Message, get_state_queue(State)]),
+            Python = get_state_python(State)
+
+            % FIXME: Call MessageAPI send_message function
+
+            ;
         _Others ->
             ok
     end,
@@ -80,11 +91,12 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %% ===================================================================
 
--spec init_state(any, any) -> #state{}.
-init_state(Channel, Queue) ->
+-spec init_state(any, any, any) -> #state{}.
+init_state(Channel, Queue, Python) ->
     #state{
         channel = Channel,
-        queue = Queue
+        queue = Queue,
+        python = Python
     }.
 
 -spec get_state_channel(#state{}) -> any.
@@ -94,3 +106,7 @@ get_state_channel(State) ->
 -spec get_state_queue(#state{}) -> any.
 get_state_queue(State) ->
     State#state.queue.
+
+-spec get_state_python(#state{}) -> any.
+get_state_python(State) ->
+    State#state.python.

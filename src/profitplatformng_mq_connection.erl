@@ -85,7 +85,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec create_connection() -> #state{}.
 create_connection() ->
-    ConnectionParams = profitplatformng_config:get(rabbitmq, amqp_params),
+    ConnectionParams = profitplatformng_config:get(rabbitmq, amqp_params, true),
     {ok, Connection} = amqp_connection:start(ConnectionParams),
     init_state(Connection).
 

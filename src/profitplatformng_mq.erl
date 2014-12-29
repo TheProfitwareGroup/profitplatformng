@@ -133,10 +133,6 @@ get_state_channel(State) ->
 get_state_state_exchange(State) ->
     State#state.state_exchange.
 
--spec get_state_state_queue(#state{}) -> any.
-get_state_state_queue(State) ->
-    State#state.state_queue.
-
 -spec get_state_created_queues(#state{}) -> any.
 get_state_created_queues(State) ->
     State#state.created_queues.

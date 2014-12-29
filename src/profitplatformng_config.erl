@@ -13,7 +13,7 @@
 
 %% API
 -export([start_link/0]).
--export([get/2]).
+-export([get/2, get/3]).
 
 %% Server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -33,7 +33,12 @@ start_link() ->
 
 -spec get(Group :: atom(), Key :: atom()) -> any().
 get(Group, Key) ->
-    gen_server:call(?SERVER, {get, Group, Key}).
+    gen_server:call(?SERVER, {get, Group, Key, false}).
+
+-spec get(Group :: atom(), Key :: atom(), UseDefault :: true | false) -> any().
+get(Group, Key, UseDefault) ->
+    gen_server:call(?SERVER, {get, Group, Key, UseDefault}).
+
 
 %% ===================================================================
 %% Server callbacks
@@ -42,10 +47,15 @@ get(Group, Key) ->
 init(_Args) ->
     {ok, state}.
 
-handle_call({get, Group, Key}, _From, State) ->
+handle_call({get, Group, Key, UseDefault}, _From, State) ->
     Reply = case application:get_env(profitplatformng, Group) of
         undefined ->
-            default(Group, Key); % Use defaults
+            case UseDefault of
+                false ->
+                    {error, nogroup, Group};
+                true ->
+                    default(Group, Key)
+            end;
         {ok, Found} ->
             proplists:get_value(Key, Found, default(Group, Key))
     end,
@@ -71,4 +81,5 @@ code_change(_OldVsn, State, _Extra) ->
 %% ===================================================================
 
 -spec default(Group :: atom(), Key :: atom()) -> any().
-default(rabbitmq, amqp_params) -> #amqp_params_network{}.
+default(rabbitmq, amqp_params) -> #amqp_params_network{};
+default(python, config) -> {}.
