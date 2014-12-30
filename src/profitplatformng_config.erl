@@ -57,7 +57,12 @@ handle_call({get, Group, Key, UseDefault}, _From, State) ->
                     default(Group, Key)
             end;
         {ok, Found} ->
-            proplists:get_value(Key, Found, default(Group, Key))
+            case UseDefault of
+                false ->
+                    proplists:get_value(Key, Found);
+                true ->
+                    proplists:get_value(Key, Found, default(Group, Key))
+            end
     end,
     {reply, Reply, State};
 

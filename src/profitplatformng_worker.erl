@@ -69,12 +69,11 @@ handle_info(Info, State) ->
             amqp_channel:cast(Channel, #'basic.ack'{delivery_tag = Tag}),
             {amqp_msg, _ClassType, Message} = Content,
 
-            io:format("Got message '~s' to queue ~s~n", [Message, get_state_queue(State)]),
-            Python = get_state_python(State)
+            TermMessage = binary_to_term(Message),
 
-            % FIXME: Call MessageAPI send_message function
-
-            ;
+            io:format("Got message '~p' to queue ~s~n", [TermMessage, get_state_queue(State)]),
+            Python = get_state_python(State),
+            python:call(Python, messageapi, send_message, [TermMessage]);
         _Others ->
             ok
     end,

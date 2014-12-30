@@ -34,7 +34,8 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 -spec publish(Queue :: atom(), Payload :: binary()) -> ok.
-publish(Queue, Payload) ->
+publish(Queue, PayloadTerm) ->
+    Payload = term_to_binary(PayloadTerm),
     gen_server:cast(?SERVER, {publish, Queue, Payload}),
     ok.
 

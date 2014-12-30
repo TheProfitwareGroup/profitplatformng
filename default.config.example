@@ -1,0 +1,16 @@
+[
+    {profitplatformng, [
+        {python, [
+            {config, [
+                {python_path, "../messageapi/"}
+            ]},
+            {profitplatform_queue_smsc, [
+                {python_class, <<"messageapi.plugins.smsc.SMSCPlugin">>},
+                {params, [
+                    {login, <<"smsc_ru_login">>},
+                    {password, <<"smsc_ru_password">>}
+                ]}
+            ]}
+        ]}
+    ]}
+].
